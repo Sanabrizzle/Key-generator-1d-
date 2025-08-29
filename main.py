@@ -1,61 +1,63 @@
 from flask import Flask, jsonify, request
 import json
-import os
 from datetime import datetime, timedelta
+import os
+import random
+import string
 
 app = Flask(__name__)
 
-# ------------------------
-# Config
-# ------------------------
-KEY_FILE = "keys.json"
-EXPIRE_DAYS = 1  # optional expiration for keys
+# File to store used keys and claimed IPs
+KEYS_FILE = "keys.json"
 
-# ------------------------
-# Load keys from file
-# ------------------------
-if os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "r") as f:
-        data = json.load(f)
-        unused_keys = data.get("unused_keys", [])
-        used_keys = data.get("used_keys", {})
-else:
-    unused_keys = []
-    used_keys = {}
+# Load keys.json or create if not exists
+if not os.path.exists(KEYS_FILE):
+    with open(KEYS_FILE, "w") as f:
+        json.dump({"used_keys": {}, "claimed_ips": {}}, f, indent=4)
 
-def save_keys():
-    with open(KEY_FILE, "w") as f:
-        json.dump({"unused_keys": unused_keys, "used_keys": used_keys}, f)
+def load_keys():
+    with open(KEYS_FILE, "r") as f:
+        return json.load(f)
 
-def is_key_expired(key):
-    if key in used_keys:
-        expire_time = datetime.fromisoformat(used_keys[key]["timestamp"]) + timedelta(days=EXPIRE_DAYS)
-        return datetime.utcnow() > expire_time
-    return False
+def save_keys(data):
+    with open(KEYS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ------------------------
-# Endpoints
-# ------------------------
+# Generate a random key
+def generate_key(length=12):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
 @app.route("/getKey")
 def get_key():
-    if not unused_keys:
-        return jsonify({"error": "No keys available"}), 404
+    data = load_keys()
+    user_ip = request.remote_addr
 
-    key = unused_keys.pop(0)  # take the first unused key
-    used_keys[key] = {"timestamp": datetime.utcnow().isoformat()}
-    save_keys()
+    # Check if IP already claimed within 24 hours
+    claimed = data.get("claimed_ips", {})
+    if user_ip in claimed:
+        last_claim = datetime.fromisoformat(claimed[user_ip])
+        if datetime.utcnow() - last_claim < timedelta(days=1):
+            return jsonify({"error": "You have already claimed a key today"}), 403
+
+    # Generate a new key
+    key = generate_key()
+    data["used_keys"][key] = {"claimed_by": user_ip, "timestamp": datetime.utcnow().isoformat()}
+    data["claimed_ips"][user_ip] = datetime.utcnow().isoformat()
+    save_keys(data)
+
     return jsonify({"key": key})
 
 @app.route("/validateKey")
 def validate_key():
     key = request.args.get("key")
-    if key in used_keys and not is_key_expired(key):
+    if not key:
+        return jsonify({"valid": False})
+    
+    data = load_keys()
+    if key in data["used_keys"]:
         return jsonify({"valid": True})
     return jsonify({"valid": False})
 
-# ------------------------
-# Run server
-# ------------------------
+# Run the server
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 3000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=3000)
