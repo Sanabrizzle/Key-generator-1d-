@@ -1,8 +1,6 @@
 from flask import Flask, jsonify, request
 import json
 import os
-import random
-import string
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
@@ -11,38 +9,23 @@ app = Flask(__name__)
 # Config
 # ------------------------
 KEY_FILE = "keys.json"
-KEY_LENGTH = 12
-EXPIRE_DAYS = 1  # Optional expiration
+EXPIRE_DAYS = 1  # optional expiration for keys
 
 # ------------------------
-# Load or initialize keys
+# Load keys from file
 # ------------------------
 if os.path.exists(KEY_FILE):
     with open(KEY_FILE, "r") as f:
         data = json.load(f)
-        issued_keys = set(data.get("issued_keys", []))
+        unused_keys = data.get("unused_keys", [])
         used_keys = data.get("used_keys", {})
 else:
-    issued_keys = set()
+    unused_keys = []
     used_keys = {}
 
-# ------------------------
-# Helper functions
-# ------------------------
 def save_keys():
     with open(KEY_FILE, "w") as f:
-        json.dump({
-            "issued_keys": list(issued_keys),
-            "used_keys": used_keys
-        }, f)
-
-def generate_key():
-    while True:
-        key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=KEY_LENGTH))
-        if key not in issued_keys:
-            issued_keys.add(key)
-            save_keys()
-            return key
+        json.dump({"unused_keys": unused_keys, "used_keys": used_keys}, f)
 
 def is_key_expired(key):
     if key in used_keys:
@@ -55,19 +38,18 @@ def is_key_expired(key):
 # ------------------------
 @app.route("/getKey")
 def get_key():
-    key = generate_key()
+    if not unused_keys:
+        return jsonify({"error": "No keys available"}), 404
+
+    key = unused_keys.pop(0)  # take the first unused key
+    used_keys[key] = {"timestamp": datetime.utcnow().isoformat()}
+    save_keys()
     return jsonify({"key": key})
 
 @app.route("/validateKey")
 def validate_key():
     key = request.args.get("key")
-    if key in issued_keys:
-        # Check if key is already used
-        if key in used_keys and not is_key_expired(key):
-            return jsonify({"valid": False})
-        # Mark as used
-        used_keys[key] = {"timestamp": datetime.utcnow().isoformat()}
-        save_keys()
+    if key in used_keys and not is_key_expired(key):
         return jsonify({"valid": True})
     return jsonify({"valid": False})
 
@@ -75,4 +57,5 @@ def validate_key():
 # Run server
 # ------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    port = int(os.environ.get("PORT", 3000))
+    app.run(host="0.0.0.0", port=port)
