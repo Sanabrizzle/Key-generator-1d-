@@ -15,8 +15,12 @@ if not os.path.exists(KEYS_FILE):
         json.dump({"used_keys": {}, "claimed_ips": {}}, f, indent=4)
 
 def load_data():
-    with open(KEYS_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(KEYS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        # fallback if file is missing or corrupted
+        return {"used_keys": {}, "claimed_ips": {}}
 
 def save_data(data):
     with open(KEYS_FILE, "w") as f:
@@ -30,12 +34,17 @@ def get_key():
     data = load_data()
     user_ip = request.remote_addr
 
-    # Check if IP already claimed within 24 hours
     claimed_ips = data.get("claimed_ips", {})
-    if user_ip in claimed_ips:
-        last_claim = datetime.fromisoformat(claimed_ips[user_ip])
-        if datetime.utcnow() - last_claim < timedelta(days=1):
-            return jsonify({"error": "You have already claimed a key today"}), 403
+
+    last_claim_str = claimed_ips.get(user_ip)
+    if last_claim_str:
+        try:
+            last_claim = datetime.fromisoformat(last_claim_str)
+            if datetime.utcnow() - last_claim < timedelta(days=1):
+                return jsonify({"error": "You have already claimed a key today"}), 403
+        except:
+            # ignore invalid timestamps
+            pass
 
     # Generate a new key
     key = generate_key()
