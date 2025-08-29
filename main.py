@@ -19,7 +19,6 @@ def load_data():
         with open(KEYS_FILE, "r") as f:
             return json.load(f)
     except:
-        # fallback if file is missing or corrupted
         return {"used_keys": {}, "claimed_ips": {}}
 
 def save_data(data):
@@ -31,38 +30,57 @@ def generate_key(length=12):
 
 @app.route("/getKey")
 def get_key():
-    data = load_data()
-    user_ip = request.remote_addr
+    try:
+        data = load_data()
 
-    claimed_ips = data.get("claimed_ips", {})
+        user_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+        if not user_ip:
+            user_ip = "unknown"
 
-    last_claim_str = claimed_ips.get(user_ip)
-    if last_claim_str:
-        try:
-            last_claim = datetime.fromisoformat(last_claim_str)
-            if datetime.utcnow() - last_claim < timedelta(days=1):
-                return jsonify({"error": "You have already claimed a key today"}), 403
-        except:
-            # ignore invalid timestamps
-            pass
+        claimed_ips = data.get("claimed_ips", {})
+        last_claim_str = claimed_ips.get(user_ip)
+        if last_claim_str:
+            try:
+                last_claim = datetime.fromisoformat(last_claim_str)
+                if datetime.utcnow() - last_claim < timedelta(days=1):
+                    return jsonify({"error": "You have already claimed a key today"}), 403
+            except:
+                pass
 
-    # Generate a new key
-    key = generate_key()
-    data["used_keys"][key] = {"claimed_by": user_ip, "timestamp": datetime.utcnow().isoformat()}
-    data["claimed_ips"][user_ip] = datetime.utcnow().isoformat()
+        # Generate new key
+        key = generate_key()
+        data["used_keys"][key] = {
+            "claimed_by": user_ip,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        data["claimed_ips"][user_ip] = datetime.utcnow().isoformat()
 
-    save_data(data)
-    return jsonify({"key": key})
+        save_data(data)
+        return jsonify({"key": key})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/validateKey")
 def validate_key():
-    key = request.args.get("key")
-    if not key:
-        return jsonify({"valid": False})
-    data = load_data()
-    if key in data["used_keys"]:
+    try:
+        key = request.args.get("key")
+        if not key:
+            return jsonify({"valid": False})
+
+        data = load_data()
+        key_info = data["used_keys"].get(key)
+        if not key_info:
+            return jsonify({"valid": False})
+
+        # Check if key expired (1 day)
+        key_time = datetime.fromisoformat(key_info["timestamp"])
+        if datetime.utcnow() - key_time > timedelta(days=1):
+            return jsonify({"valid": False, "error": "Key expired"})
+
         return jsonify({"valid": True})
-    return jsonify({"valid": False})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
